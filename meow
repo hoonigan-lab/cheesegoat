@@ -1,0 +1,1103 @@
+--------------------------------------------------
+-- DEV FLAG
+--------------------------------------------------
+local DEV_MODE = false
+
+--------------------------------------------------
+-- SERVICES
+--------------------------------------------------
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
+local Camera = workspace.CurrentCamera
+local LocalPlayer = Players.LocalPlayer
+local TweenService = game:GetService("TweenService")
+local Lighting = game:GetService("Lighting")
+
+--------------------------------------------------
+-- GUI PARENT
+--------------------------------------------------
+local GuiParent = DEV_MODE and LocalPlayer:WaitForChild("PlayerGui") or CoreGui
+
+--------------------------------------------------
+-- STATE
+--------------------------------------------------
+-- AIMBOT
+local aimbotEnabled = true
+local aimbotSmoothness = 0.15
+local fovRadius = 40
+local wallCheckEnabled = true
+local teamCheckEnabled = false
+local aimbotBodyPart = "Head"
+local fovColor = Color3.fromRGB(140,95,185)
+
+-- CHAMS
+local chamsEnabled = true
+local chamColor = Color3.fromRGB(140,95,185)
+local highlights = {}
+local chamStyle = "Full Body"
+local chamParts = {}
+
+-- MISC FEATURES (ADDED)
+local infiniteJumpEnabled = false
+local noclipEnabled = false
+local flyEnabled = false
+local noShadowsEnabled = false
+local fullBrightnessEnabled = false
+local antiAfkEnabled = false
+
+-- MISC CONNECTIONS (ADDED)
+local noclipConnection
+local flyConnection
+local antiAfkConnection
+local jumpConnection
+local originalShadowQuality
+local originalBrightness
+
+--------------------------------------------------
+-- FOV CIRCLE
+--------------------------------------------------
+local FOVCircle
+if not DEV_MODE then
+    FOVCircle = Drawing.new("Circle")
+    FOVCircle.Filled = false
+    FOVCircle.Thickness = 1
+    FOVCircle.Transparency = 1
+    FOVCircle.Color = fovColor
+end
+
+--------------------------------------------------
+-- MISC FEATURE FUNCTIONS (ADDED)
+--------------------------------------------------
+local function setupInfiniteJump()
+    if jumpConnection then
+        jumpConnection:Disconnect()
+        jumpConnection = nil
+    end
+    
+    if infiniteJumpEnabled then
+        jumpConnection = UserInputService.JumpRequest:Connect(function()
+            if LocalPlayer.Character then
+                local humanoid = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+                if humanoid then
+                    humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+                end
+            end
+        end)
+    end
+end
+
+local function setupNoClip()
+    if noclipConnection then
+        noclipConnection:Disconnect()
+        noclipConnection = nil
+    end
+    
+    if noclipEnabled then
+        noclipConnection = RunService.Stepped:Connect(function()
+            if LocalPlayer.Character then
+                for _, part in pairs(LocalPlayer.Character:GetDescendants()) do
+                    if part:IsA("BasePart") and part.CanCollide then
+                        part.CanCollide = false
+                    end
+                end
+            end
+        end)
+    end
+end
+
+local function setupFly()
+    if flyConnection then
+        flyConnection:Disconnect()
+        flyConnection = nil
+    end
+    
+    if flyEnabled and LocalPlayer.Character then
+        local humanoid = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            humanoid.PlatformStand = true
+            
+            local bodyVelocity = Instance.new("BodyVelocity")
+            bodyVelocity.MaxForce = Vector3.new(40000, 40000, 40000)
+            bodyVelocity.Velocity = Vector3.new(0, 0, 0)
+            bodyVelocity.Parent = LocalPlayer.Character:FindFirstChild("HumanoidRootPart") or LocalPlayer.Character.PrimaryPart
+            
+            flyConnection = RunService.Heartbeat:Connect(function()
+                if not flyEnabled or not LocalPlayer.Character then
+                    if flyConnection then
+                        flyConnection:Disconnect()
+                        flyConnection = nil
+                    end
+                    return
+                end
+                
+                local root = LocalPlayer.Character:FindFirstChild("HumanoidRootPart") or LocalPlayer.Character.PrimaryPart
+                if root and bodyVelocity then
+                    local direction = Vector3.new(0, 0, 0)
+                    
+                    if UserInputService:IsKeyDown(Enum.KeyCode.W) then
+                        direction = direction + Camera.CFrame.LookVector
+                    end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.S) then
+                        direction = direction - Camera.CFrame.LookVector
+                    end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.A) then
+                        direction = direction - Camera.CFrame.RightVector
+                    end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.D) then
+                        direction = direction + Camera.CFrame.RightVector
+                    end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+                        direction = direction + Vector3.new(0, 1, 0)
+                    end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
+                        direction = direction - Vector3.new(0, 1, 0)
+                    end
+                    
+                    bodyVelocity.Velocity = direction * 50
+                end
+            end)
+        end
+    elseif LocalPlayer.Character then
+        local humanoid = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            humanoid.PlatformStand = false
+        end
+    end
+end
+
+local function setNoShadows(enabled)
+    if enabled then
+        originalShadowQuality = Lighting.GlobalShadows
+        Lighting.GlobalShadows = false
+    elseif originalShadowQuality ~= nil then
+        Lighting.GlobalShadows = originalShadowQuality
+    end
+end
+
+local function setFullBrightness(enabled)
+    if enabled then
+        originalBrightness = Lighting.Brightness
+        Lighting.Brightness = 2
+        Lighting.ClockTime = 14
+        Lighting.OutdoorAmbient = Color3.new(1, 1, 1)
+    elseif originalBrightness ~= nil then
+        Lighting.Brightness = originalBrightness
+    end
+end
+
+local function setupAntiAFK()
+    if antiAfkConnection then
+        antiAfkConnection:Disconnect()
+        antiAfkConnection = nil
+    end
+    
+    if antiAfkEnabled then
+        antiAfkConnection = RunService.Heartbeat:Connect(function()
+            if LocalPlayer.Character then
+                local humanoid = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+                if humanoid then
+                    humanoid:Move(Vector3.new(0, 0, 0))
+                end
+            end
+        end)
+    end
+end
+
+--------------------------------------------------
+-- COLOR CONVERSION FUNCTIONS
+--------------------------------------------------
+local function RGBToHex(color)
+    local r = math.floor(color.R * 255)
+    local g = math.floor(color.G * 255)
+    local b = math.floor(color.B * 255)
+    return string.format("#%02X%02X%02X", r, g, b)
+end
+
+local function HexToRGB(hex)
+    hex = hex:gsub("#","")
+    if #hex == 3 then
+        hex = hex:gsub("(.)", "%1%1")
+    end
+    local r = tonumber(hex:sub(1,2), 16) or 0
+    local g = tonumber(hex:sub(3,4), 16) or 0
+    local b = tonumber(hex:sub(5,6), 16) or 0
+    return Color3.fromRGB(r, g, b)
+end
+
+--------------------------------------------------
+-- CHAMS LOGIC
+--------------------------------------------------
+local function clearChams()
+    for _,h in pairs(highlights) do
+        h:Destroy()
+    end
+    table.clear(highlights)
+    
+    for _, parts in pairs(chamParts) do
+        for _, part in pairs(parts) do
+            part:Destroy()
+        end
+    end
+    table.clear(chamParts)
+end
+
+local function createHighlightForPart(part)
+    local highlight = Instance.new("Highlight")
+    highlight.FillColor = chamColor
+    highlight.OutlineColor = Color3.new(1,1,1)
+    highlight.FillTransparency = 0.45
+    highlight.OutlineTransparency = 0.15
+    highlight.Adornee = part
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.Parent = CoreGui
+    return highlight
+end
+
+local function applyChams(plr)
+    if plr == LocalPlayer or not plr.Character then return end
+    
+    if highlights[plr] then
+        highlights[plr]:Destroy()
+        highlights[plr] = nil
+    end
+    
+    if chamParts[plr] then
+        for _, part in pairs(chamParts[plr]) do
+            part:Destroy()
+        end
+        chamParts[plr] = nil
+    end
+    
+    if not chamsEnabled then return end
+    
+    local char = plr.Character
+    
+    if chamStyle == "Full Body" then
+        local h = createHighlightForPart(char)
+        highlights[plr] = h
+    else
+        local parts = {}
+        
+        if chamStyle == "Head" then
+            local head = char:FindFirstChild("Head")
+            if head then
+                table.insert(parts, createHighlightForPart(head))
+            end
+        elseif chamStyle == "Chest" then
+            local torso = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
+            if torso then
+                table.insert(parts, createHighlightForPart(torso))
+            end
+        elseif chamStyle == "Arms" then
+            local leftArm = char:FindFirstChild("LeftHand") or char:FindFirstChild("LeftArm")
+            local rightArm = char:FindFirstChild("RightHand") or char:FindFirstChild("RightArm")
+            if leftArm then
+                table.insert(parts, createHighlightForPart(leftArm))
+            end
+            if rightArm then
+                table.insert(parts, createHighlightForPart(rightArm))
+            end
+        elseif chamStyle == "Legs" then
+            local leftLeg = char:FindFirstChild("LeftFoot") or char:FindFirstChild("LeftLeg")
+            local rightLeg = char:FindFirstChild("RightFoot") or char:FindFirstChild("RightLeg")
+            if leftLeg then
+                table.insert(parts, createHighlightForPart(leftLeg))
+            end
+            if rightLeg then
+                table.insert(parts, createHighlightForPart(rightLeg))
+            end
+        end
+        
+        if #parts > 0 then
+            chamParts[plr] = parts
+        end
+    end
+end
+
+--------------------------------------------------
+-- WALL CHECK
+--------------------------------------------------
+local function canSeeTarget(targetHead)
+    if not wallCheckEnabled then
+        return true
+    end
+
+    local origin = Camera.CFrame.Position
+    local direction = targetHead.Position - origin
+
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = {
+        LocalPlayer.Character,
+        targetHead.Parent
+    }
+    params.IgnoreWater = true
+
+    local result = workspace:Raycast(origin, direction, params)
+    return result == nil
+end
+
+--------------------------------------------------
+-- AIMBOT TARGET
+--------------------------------------------------
+local function getClosestTarget()
+    local closest, shortest = nil, fovRadius
+    local center = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
+
+    for _,plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+            if teamCheckEnabled and plr.Team == LocalPlayer.Team then continue end
+
+            local char = plr.Character
+            local targetPart
+            
+            if aimbotBodyPart == "Head" then
+                targetPart = char:FindFirstChild("Head")
+            elseif aimbotBodyPart == "Chest" then
+                targetPart = char:FindFirstChild("UpperTorso") or char:FindFirstChild("HumanoidRootPart")
+            elseif aimbotBodyPart == "Center" then
+                targetPart = char:FindFirstChild("HumanoidRootPart")
+            elseif aimbotBodyPart == "Arms" then
+                targetPart = char:FindFirstChild("RightHand") or char:FindFirstChild("LeftHand") or char:FindFirstChild("HumanoidRootPart")
+            elseif aimbotBodyPart == "Legs" then
+                targetPart = char:FindFirstChild("RightFoot") or char:FindFirstChild("LeftFoot") or char:FindFirstChild("HumanoidRootPart")
+            end
+            
+            if targetPart then
+                local pos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
+
+                if onScreen and canSeeTarget(targetPart) then
+                    local dist = (Vector2.new(pos.X,pos.Y) - center).Magnitude
+                    if dist <= shortest then
+                        shortest = dist
+                        closest = targetPart
+                    end
+                end
+            end
+        end
+    end
+    return closest
+end
+
+--------------------------------------------------
+-- RENDER LOOP
+--------------------------------------------------
+RunService.RenderStepped:Connect(function()
+    if not DEV_MODE and FOVCircle then
+        FOVCircle.Visible = aimbotEnabled
+        FOVCircle.Radius = fovRadius
+        FOVCircle.Position = Vector2.new(
+            Camera.ViewportSize.X/2,
+            Camera.ViewportSize.Y/2
+        )
+        FOVCircle.Color = fovColor
+    end
+
+    if aimbotEnabled and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
+        local target = getClosestTarget()
+        if target then
+            Camera.CFrame = Camera.CFrame:Lerp(
+                CFrame.new(Camera.CFrame.Position, target.Position),
+                aimbotSmoothness
+            )
+        end
+    end
+end)
+
+--------------------------------------------------
+-- GUI
+--------------------------------------------------
+local gui = Instance.new("ScreenGui", GuiParent)
+gui.ResetOnSpawn = false
+
+local main = Instance.new("Frame", gui)
+main.Size = UDim2.new(0,640,0,420)
+main.Position = UDim2.new(0.5,-320,0.5,-210)
+main.BackgroundColor3 = Color3.fromRGB(40,20,60)
+main.BackgroundTransparency = 0.1
+main.BorderSizePixel = 0
+Instance.new("UICorner", main).CornerRadius = UDim.new(0,18)
+
+--------------------------------------------------
+-- DRAGGING
+--------------------------------------------------
+local dragging, dragStart, startPos = false
+main.InputBegan:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        dragStart = i.Position
+        startPos = main.Position
+    end
+end)
+UserInputService.InputEnded:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = false
+    end
+end)
+UserInputService.InputChanged:Connect(function(i)
+    if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+        local delta = i.Position - dragStart
+        main.Position = startPos + UDim2.fromOffset(delta.X, delta.Y)
+    end
+end)
+
+--------------------------------------------------
+-- HEADER
+--------------------------------------------------
+local header = Instance.new("Frame", main)
+header.Size = UDim2.new(1,0,0,45)
+header.BackgroundTransparency = 1
+
+local title = Instance.new("TextLabel", header)
+title.Size = UDim2.new(1,-60,1,0)
+title.Position = UDim2.new(0,15,0,0)
+title.Text = "HOONIGAN'S MENU"
+title.Font = Enum.Font.GothamBold
+title.TextSize = 18
+title.TextColor3 = Color3.new(1,1,1)
+title.BackgroundTransparency = 1
+
+--------------------------------------------------
+-- MINIMIZE
+--------------------------------------------------
+local minimized = false
+local bodySize = main.Size
+
+local minimize = Instance.new("TextButton", header)
+minimize.Size = UDim2.new(0,32,0,32)
+minimize.Position = UDim2.new(1,-40,0.5,-16)
+minimize.Text = "–"
+minimize.Font = Enum.Font.GothamBold
+minimize.TextSize = 20
+minimize.TextColor3 = Color3.new(1,1,1)
+minimize.BackgroundColor3 = Color3.fromRGB(90,50,140)
+Instance.new("UICorner", minimize).CornerRadius = UDim.new(1,0)
+
+local body = Instance.new("Frame", main)
+body.Position = UDim2.new(0,0,0,45)
+body.Size = UDim2.new(1,0,1,-45)
+body.BackgroundTransparency = 1
+
+minimize.MouseButton1Click:Connect(function()
+    minimized = not minimized
+    body.Visible = not minimized
+    main.Size = minimized and UDim2.new(bodySize.X.Scale,bodySize.X.Offset,0,45) or bodySize
+    minimize.Text = minimized and "+" or "–"
+end)
+
+--------------------------------------------------
+-- SIDEBAR
+--------------------------------------------------
+local sidebar = Instance.new("Frame", body)
+sidebar.Size = UDim2.new(0,150,1,0)
+sidebar.BackgroundColor3 = Color3.fromRGB(55,30,80)
+sidebar.BackgroundTransparency = 0.15
+Instance.new("UICorner", sidebar).CornerRadius = UDim.new(0,14)
+
+--------------------------------------------------
+-- PAGES
+--------------------------------------------------
+local pages = {}
+local function page()
+    local p = Instance.new("Frame", body)
+    p.Position = UDim2.new(0,160,0,10)
+    p.Size = UDim2.new(1,-170,1,-20)
+    p.BackgroundTransparency = 1
+    p.Visible = false
+    return p
+end
+
+pages.Aimbot = page()
+pages.Chams = page()
+pages.Misc = page()
+pages.Settings = page()
+pages.Aimbot.Visible = true
+
+local function switch(name)
+    for k,v in pairs(pages) do v.Visible = (k==name) end
+end
+
+--------------------------------------------------
+-- SIDEBAR BUTTONS
+--------------------------------------------------
+local function tab(text,y,callback)
+    local b = Instance.new("TextButton", sidebar)
+    b.Size = UDim2.new(1,-20,0,36)
+    b.Position = UDim2.new(0,10,0,y)
+    b.Text = text
+    b.Font = Enum.Font.Gotham
+    b.TextSize = 14
+    b.TextColor3 = Color3.new(1,1,1)
+    b.BackgroundColor3 = Color3.fromRGB(90,50,140)
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0,10)
+    b.MouseButton1Click:Connect(callback)
+end
+
+tab("Aimbot",20,function()switch("Aimbot")end)
+tab("Chams",65,function()switch("Chams")end)
+tab("Misc",110,function()switch("Misc")end)
+tab("Settings",155,function()switch("Settings")end)
+
+--------------------------------------------------
+-- UI HELPERS
+--------------------------------------------------
+local function toggle(parent,text,y,get,set)
+    local b = Instance.new("TextButton", parent)
+    b.Size = UDim2.new(0,260,0,36)
+    b.Position = UDim2.new(0,0,0,y)
+    b.Font = Enum.Font.Gotham
+    b.TextSize = 14
+    b.TextColor3 = Color3.new(1,1,1)
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0,10)
+
+    local function refresh()
+        b.Text = text..": "..(get() and "ON" or "OFF")
+        b.BackgroundColor3 = get() and Color3.fromRGB(90,50,140) or Color3.fromRGB(80,80,80)
+    end
+
+    refresh()
+    b.MouseButton1Click:Connect(function()
+        set(not get())
+        refresh()
+    end)
+end
+
+local function slider(parent,text,y,min,max,get,set)
+    local label = Instance.new("TextLabel", parent)
+    label.Size = UDim2.new(0,260,0,20)
+    label.Position = UDim2.new(0,0,0,y)
+    label.BackgroundTransparency = 1
+    label.TextColor3 = Color3.new(1,1,1)
+    label.Font = Enum.Font.Gotham
+    label.TextSize = 14
+
+    local bar = Instance.new("Frame", parent)
+    bar.Size = UDim2.new(0,260,0,6)
+    bar.Position = UDim2.new(0,0,0,y+25)
+    bar.BackgroundColor3 = Color3.fromRGB(120,80,160)
+    bar.BorderSizePixel = 0
+    Instance.new("UICorner", bar).CornerRadius = UDim.new(1,0)
+
+    local fill = Instance.new("Frame", bar)
+    fill.BackgroundColor3 = Color3.fromRGB(90,50,140)
+    fill.BorderSizePixel = 0
+    Instance.new("UICorner", fill).CornerRadius = UDim.new(1,0)
+
+    local function update(pct)
+        local val = min + (max-min)*pct
+        set(val)
+        fill.Size = UDim2.new(pct,0,1,0)
+        label.Text = string.format("%s: %.2f", text, val)
+    end
+
+    update((get()-min)/(max-min))
+
+    bar.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then
+            local pct = math.clamp(
+                (i.Position.X - bar.AbsolutePosition.X)/bar.AbsoluteSize.X,0,1
+            )
+            update(pct)
+        end
+    end)
+end
+
+--------------------------------------------------
+-- DROPDOWN HELPER
+--------------------------------------------------
+local function createDropdown(parent, text, y, options, get, set)
+    local container = Instance.new("Frame", parent)
+    container.Size = UDim2.new(0, 260, 0, 36)
+    container.Position = UDim2.new(0, 0, 0, y)
+    container.BackgroundTransparency = 1
+    
+    local button = Instance.new("TextButton", container)
+    button.Size = UDim2.new(1, 0, 1, 0)
+    button.Font = Enum.Font.Gotham
+    button.TextSize = 14
+    button.TextColor3 = Color3.new(1, 1, 1)
+    button.BackgroundColor3 = Color3.fromRGB(90, 50, 140)
+    Instance.new("UICorner", button).CornerRadius = UDim.new(0, 10)
+    
+    local function updateButton()
+        button.Text = text .. ": " .. get()
+    end
+    
+    updateButton()
+    
+    local optionsFrame = Instance.new("Frame", parent)
+    optionsFrame.Size = UDim2.new(0, 260, 0, 0)
+    optionsFrame.Position = UDim2.new(0, 0, 0, y + 41)
+    optionsFrame.BackgroundColor3 = Color3.fromRGB(70, 40, 100)
+    optionsFrame.BorderSizePixel = 0
+    optionsFrame.Visible = false
+    optionsFrame.ZIndex = 100
+    Instance.new("UICorner", optionsFrame).CornerRadius = UDim.new(0, 10)
+    
+    local listLayout = Instance.new("UIListLayout", optionsFrame)
+    listLayout.Padding = UDim.new(0, 2)
+    
+    local isOpen = false
+    
+    local function toggleDropdown()
+        isOpen = not isOpen
+        optionsFrame.Visible = isOpen
+        
+        if isOpen then
+            for _, child in ipairs(optionsFrame:GetChildren()) do
+                if child:IsA("TextButton") then
+                    child:Destroy()
+                end
+            end
+            
+            for i, option in ipairs(options) do
+                local optionButton = Instance.new("TextButton", optionsFrame)
+                optionButton.Size = UDim2.new(1, -10, 0, 32)
+                optionButton.Position = UDim2.new(0, 5, 0, (i-1) * 34)
+                optionButton.Text = option
+                optionButton.Font = Enum.Font.Gotham
+                optionButton.TextSize = 14
+                optionButton.TextColor3 = Color3.new(1, 1, 1)
+                optionButton.BackgroundColor3 = option == get() and Color3.fromRGB(110, 70, 160) or Color3.fromRGB(90, 50, 140)
+                optionButton.BorderSizePixel = 0
+                optionButton.ZIndex = 101
+                Instance.new("UICorner", optionButton).CornerRadius = UDim.new(0, 8)
+                
+                optionButton.MouseButton1Click:Connect(function()
+                    set(option)
+                    updateButton()
+                    isOpen = false
+                    optionsFrame.Visible = false
+                end)
+            end
+            
+            local optionCount = #options
+            optionsFrame.Size = UDim2.new(0, 260, 0, (optionCount * 34) + 4)
+        end
+    end
+    
+    button.MouseButton1Click:Connect(toggleDropdown)
+    
+    UserInputService.InputBegan:Connect(function(input)
+        if isOpen and input.UserInputType == Enum.UserInputType.MouseButton1 then
+            local mousePos = UserInputService:GetMouseLocation()
+            local buttonPos = button.AbsolutePosition
+            local buttonSize = button.AbsoluteSize
+            local framePos = optionsFrame.AbsolutePosition
+            local frameSize = optionsFrame.AbsoluteSize
+            
+            local clickedOnButton = mousePos.X >= buttonPos.X and mousePos.X <= buttonPos.X + buttonSize.X and
+                                   mousePos.Y >= buttonPos.Y and mousePos.Y <= buttonPos.Y + buttonSize.Y
+            local clickedOnFrame = mousePos.X >= framePos.X and mousePos.X <= framePos.X + frameSize.X and
+                                  mousePos.Y >= framePos.Y and mousePos.Y <= framePos.Y + frameSize.Y
+            
+            if not clickedOnButton and not clickedOnFrame then
+                isOpen = false
+                optionsFrame.Visible = false
+            end
+        end
+    end)
+    
+    return container
+end
+
+--------------------------------------------------
+-- HEX COLOR PICKER HELPER
+--------------------------------------------------
+local function createColorPicker(parent, text, y, getColor, setColor, updateFunction)
+    local container = Instance.new("Frame", parent)
+    container.Size = UDim2.new(0, 260, 0, 65)
+    container.Position = UDim2.new(0, 0, 0, y)
+    container.BackgroundTransparency = 1
+    
+    local label = Instance.new("TextLabel", container)
+    label.Size = UDim2.new(1, 0, 0, 20)
+    label.Position = UDim2.new(0, 0, 0, 0)
+    label.BackgroundTransparency = 1
+    label.TextColor3 = Color3.new(1, 1, 1)
+    label.Font = Enum.Font.Gotham
+    label.TextSize = 14
+    label.Text = text
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    
+    local preview = Instance.new("Frame", container)
+    preview.Size = UDim2.new(0, 40, 0, 40)
+    preview.Position = UDim2.new(0, 0, 0, 25)
+    preview.BackgroundColor3 = getColor()
+    preview.BorderSizePixel = 0
+    Instance.new("UICorner", preview).CornerRadius = UDim.new(0, 8)
+    
+    local hexBox = Instance.new("TextBox", container)
+    hexBox.Size = UDim2.new(0, 140, 0, 36)
+    hexBox.Position = UDim2.new(0, 50, 0, 25)
+    hexBox.PlaceholderText = "#RRGGBB"
+    hexBox.Text = RGBToHex(getColor())
+    hexBox.Font = Enum.Font.Gotham
+    hexBox.TextSize = 14
+    hexBox.TextColor3 = Color3.new(1, 1, 1)
+    hexBox.BackgroundColor3 = Color3.fromRGB(90, 50, 140)
+    hexBox.BorderSizePixel = 0
+    Instance.new("UICorner", hexBox).CornerRadius = UDim.new(0, 8)
+    
+    hexBox.FocusLost:Connect(function(enterPressed)
+        if enterPressed then
+            local hex = hexBox.Text
+            if hex:match("^#?[0-9A-Fa-f]+$") then
+                local color = HexToRGB(hex)
+                setColor(color)
+                preview.BackgroundColor3 = color
+                if updateFunction then
+                    updateFunction()
+                end
+            else
+                hexBox.Text = RGBToHex(getColor())
+            end
+        end
+    end)
+    
+    local function updateColor()
+        local color = getColor()
+        preview.BackgroundColor3 = color
+        hexBox.Text = RGBToHex(color)
+    end
+    
+    return {container = container, update = updateColor}
+end
+
+--------------------------------------------------
+-- CHECKBOX HELPER (ADDED)
+--------------------------------------------------
+local function createCheckbox(parent, text, y, get, set)
+    local container = Instance.new("Frame", parent)
+    container.Size = UDim2.new(0, 260, 0, 36)
+    container.Position = UDim2.new(0, 0, 0, y)
+    container.BackgroundTransparency = 1
+    
+    local checkbox = Instance.new("Frame", container)
+    checkbox.Size = UDim2.new(0, 24, 0, 24)
+    checkbox.Position = UDim2.new(0, 0, 0.5, -12)
+    checkbox.BackgroundColor3 = get() and Color3.fromRGB(90, 50, 140) or Color3.fromRGB(80, 80, 80)
+    checkbox.BorderSizePixel = 0
+    Instance.new("UICorner", checkbox).CornerRadius = UDim.new(0, 6)
+    
+    local checkmark = Instance.new("TextLabel", checkbox)
+    checkmark.Size = UDim2.new(1, 0, 1, 0)
+    checkmark.Text = "✓"
+    checkmark.TextColor3 = Color3.new(1, 1, 1)
+    checkmark.Font = Enum.Font.GothamBold
+    checkmark.TextSize = 16
+    checkmark.BackgroundTransparency = 1
+    checkmark.Visible = get()
+    
+    local label = Instance.new("TextLabel", container)
+    label.Size = UDim2.new(1, -30, 1, 0)
+    label.Position = UDim2.new(0, 30, 0, 0)
+    label.Text = text
+    label.TextColor3 = Color3.new(1, 1, 1)
+    label.Font = Enum.Font.Gotham
+    label.TextSize = 14
+    label.BackgroundTransparency = 1
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    
+    local function refresh()
+        local state = get()
+        checkbox.BackgroundColor3 = state and Color3.fromRGB(90, 50, 140) or Color3.fromRGB(80, 80, 80)
+        checkmark.Visible = state
+    end
+    
+    refresh()
+    
+    container.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            set(not get())
+            refresh()
+        end
+    end)
+    
+    return container
+end
+
+--------------------------------------------------
+-- AIMBOT TAB CONTENT
+--------------------------------------------------
+local aimbotY = 0
+toggle(pages.Aimbot,"Aimbot",aimbotY,function()return aimbotEnabled end,function(v)aimbotEnabled=v end)
+aimbotY = aimbotY + 45
+
+toggle(pages.Aimbot,"Wall Check",aimbotY,function()return wallCheckEnabled end,function(v)wallCheckEnabled=v end)
+aimbotY = aimbotY + 45
+
+toggle(pages.Aimbot,"Team Check",aimbotY,function()return teamCheckEnabled end,function(v)teamCheckEnabled=v end)
+aimbotY = aimbotY + 45
+
+slider(pages.Aimbot,"FOV",aimbotY,1,300,function()return fovRadius end,function(v)fovRadius=math.floor(v)end)
+aimbotY = aimbotY + 70
+
+slider(pages.Aimbot,"Smoothness",aimbotY,0.01,1,function()return aimbotSmoothness end,function(v)aimbotSmoothness=v end)
+aimbotY = aimbotY + 70
+
+createDropdown(pages.Aimbot, "Target Part", aimbotY, {"Head", "Chest", "Center", "Arms", "Legs"}, 
+    function() return aimbotBodyPart end, 
+    function(v) aimbotBodyPart = v end
+)
+
+--------------------------------------------------
+-- MISC TAB CONTENT (ADDED)
+--------------------------------------------------
+local miscY = 0
+
+-- Infinite Jump Checkbox
+createCheckbox(pages.Misc, "Infinite Jump", 0,
+    function() return infiniteJumpEnabled end,
+    function(v)
+        infiniteJumpEnabled = v
+        setupInfiniteJump()
+    end
+)
+
+-- NoClip Checkbox
+createCheckbox(pages.Misc, "NoClip", 35,
+    function() return noclipEnabled end,
+    function(v)
+        noclipEnabled = v
+        setupNoClip()
+    end
+)
+
+-- Fly Checkbox
+createCheckbox(pages.Misc, "Fly", 70,
+    function() return flyEnabled end,
+    function(v)
+        flyEnabled = v
+        setupFly()
+    end
+)
+
+-- No Shadows Checkbox
+createCheckbox(pages.Misc, "No Shadows", 105,
+    function() return noShadowsEnabled end,
+    function(v)
+        noShadowsEnabled = v
+        setNoShadows(v)
+    end
+)
+
+-- Full Brightness Checkbox
+createCheckbox(pages.Misc, "Full Brightness", 140,
+    function() return fullBrightnessEnabled end,
+    function(v)
+        fullBrightnessEnabled = v
+        setFullBrightness(v)
+    end
+)
+
+-- Anti-AFK Checkbox
+createCheckbox(pages.Misc, "Anti-AFK", 175,
+    function() return antiAfkEnabled end,
+    function(v)
+        antiAfkEnabled = v
+        setupAntiAFK()
+    end
+)
+
+-- Chams Color Picker (MOVED FROM CHAMS TAB)
+local chamColorPicker = createColorPicker(pages.Misc, "Cham Color", 210, 
+    function() return chamColor end, 
+    function(v) 
+        chamColor = v
+        updateAllChams()
+    end,
+    updateAllChams
+)
+
+-- FOV Circle Color Picker (MOVED FROM SETTINGS TAB)
+local fovColorPicker = createColorPicker(pages.Misc, "FOV Circle Color", 280, 
+    function() return fovColor end, 
+    function(v) 
+        fovColor = v
+        if FOVCircle then
+            FOVCircle.Color = v
+        end
+    end,
+    nil
+)
+
+--------------------------------------------------
+-- PLAYER HOOKING (RESPAWN SAFE)
+--------------------------------------------------
+local function hookPlayer(plr)
+    if plr == LocalPlayer then return end
+
+    plr.CharacterAdded:Connect(function()
+        task.wait(0.1)
+        applyChams(plr)
+    end)
+
+    plr.CharacterRemoving:Connect(function()
+        if highlights[plr] then
+            highlights[plr]:Destroy()
+            highlights[plr] = nil
+        end
+        
+        if chamParts[plr] then
+            for _, part in pairs(chamParts[plr]) do
+                part:Destroy()
+            end
+            chamParts[plr] = nil
+        end
+    end)
+end
+
+--------------------------------------------------
+-- INITIAL PLAYER SETUP
+--------------------------------------------------
+for _,plr in ipairs(Players:GetPlayers()) do
+    hookPlayer(plr)
+    if plr.Character then
+        applyChams(plr)
+    end
+end
+
+Players.PlayerAdded:Connect(hookPlayer)
+
+--------------------------------------------------
+-- CHAMS UI ACTIONS
+--------------------------------------------------
+local function setChamsEnabled(state)
+    chamsEnabled = state
+    if not state then
+        clearChams()
+    else
+        for _,plr in ipairs(Players:GetPlayers()) do
+            applyChams(plr)
+        end
+    end
+end
+
+local function updateAllChams()
+    clearChams()
+    if chamsEnabled then
+        for _,plr in ipairs(Players:GetPlayers()) do
+            applyChams(plr)
+        end
+    end
+end
+
+local function cycleChamColor()
+    local r = (chamColor.R * 255 + 50) % 255
+    local g = (chamColor.G * 255 + 50) % 255
+    local b = (chamColor.B * 255 + 50) % 255
+    chamColor = Color3.fromRGB(r,g,b)
+
+    updateAllChams()
+end
+
+--------------------------------------------------
+-- CHAMS TAB CONTENT (UPDATED - REMOVED COLOR PICKERS)
+--------------------------------------------------
+local chamsY = 0
+toggle(pages.Chams,"Chams",chamsY,
+    function() return chamsEnabled end,
+    function(v) setChamsEnabled(v) end
+)
+chamsY = chamsY + 45
+
+createDropdown(pages.Chams, "Cham Style", chamsY, {"Full Body", "Head", "Chest", "Arms", "Legs"}, 
+    function() return chamStyle end, 
+    function(v) 
+        chamStyle = v
+        updateAllChams()
+    end
+)
+chamsY = chamsY + 45
+
+-- Keep cycle button in Chams tab
+local cycleChamBtn = Instance.new("TextButton", pages.Chams)
+cycleChamBtn.Size = UDim2.new(0, 260, 0, 36)
+cycleChamBtn.Position = UDim2.new(0, 0, 0, chamsY)
+cycleChamBtn.Text = "Cycle Cham Color"
+cycleChamBtn.Font = Enum.Font.Gotham
+cycleChamBtn.TextSize = 14
+cycleChamBtn.TextColor3 = Color3.new(1,1,1)
+cycleChamBtn.BackgroundColor3 = Color3.fromRGB(90,50,140)
+Instance.new("UICorner", cycleChamBtn).CornerRadius = UDim.new(0,10)
+
+cycleChamBtn.MouseButton1Click:Connect(function()
+    cycleChamColor()
+    if chamColorPicker and chamColorPicker.update then
+        chamColorPicker.update()
+    end
+end)
+
+--------------------------------------------------
+-- SETTINGS TAB CONTENT (UPDATED - REMOVED COLOR PICKERS)
+--------------------------------------------------
+local settingsY = 0
+
+-- Kill switch (always last and only option in Settings now)
+local killButton = Instance.new("TextButton", pages.Settings)
+killButton.Size = UDim2.new(0, 260, 0, 36)
+killButton.Position = UDim2.new(0, 0, 0, settingsY)
+killButton.Text = "KILL SWITCH"
+killButton.Font = Enum.Font.GothamBold
+killButton.TextSize = 16
+killButton.TextColor3 = Color3.new(1, 0.3, 0.3)
+killButton.BackgroundColor3 = Color3.fromRGB(180, 50, 50)
+Instance.new("UICorner", killButton).CornerRadius = UDim.new(0, 10)
+
+killButton.MouseButton1Click:Connect(function()
+    -- Destroy GUI
+    gui:Destroy()
+    
+    -- Clear chams
+    clearChams()
+    
+    -- Clear FOV circle
+    if FOVCircle then
+        FOVCircle:Remove()
+    end
+    
+    -- Reset all features
+    aimbotEnabled = false
+    chamsEnabled = false
+    
+    -- Clean up misc features
+    if noclipConnection then
+        noclipConnection:Disconnect()
+    end
+    if flyConnection then
+        flyConnection:Disconnect()
+    end
+    if antiAfkConnection then
+        antiAfkConnection:Disconnect()
+    end
+    if jumpConnection then
+        jumpConnection:Disconnect()
+    end
+    
+    -- Reset lighting
+    if originalShadowQuality ~= nil then
+        Lighting.GlobalShadows = originalShadowQuality
+    end
+    if originalBrightness ~= nil then
+        Lighting.Brightness = originalBrightness
+    end
+    
+    print("HOONIGAN GUI terminated")
+end)
+
+killButton.MouseEnter:Connect(function()
+    local tween = TweenService:Create(killButton, TweenInfo.new(0.2), {
+        BackgroundColor3 = Color3.fromRGB(220, 70, 70)
+    })
+    tween:Play()
+end)
+
+killButton.MouseLeave:Connect(function()
+    local tween = TweenService:Create(killButton, TweenInfo.new(0.2), {
+        BackgroundColor3 = Color3.fromRGB(180, 50, 50)
+    })
+    tween:Play()
+end)
