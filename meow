@@ -382,26 +382,60 @@ local function getClosestTarget()
 end
 
 --------------------------------------------------
--- RENDER LOOP
+-- OPTIMIZED RENDER LOOP
 --------------------------------------------------
-RunService.RenderStepped:Connect(function()
-    if not DEV_MODE and FOVCircle then
-        FOVCircle.Visible = aimbotEnabled
-        FOVCircle.Radius = fovRadius
-        FOVCircle.Position = Vector2.new(
-            Camera.ViewportSize.X/2,
-            Camera.ViewportSize.Y/2
-        )
-        FOVCircle.Color = fovColor
-    end
+local lastFOVUpdate = 0
+local lastTargetCheck = 0
+local cachedViewportCenter = Vector2.zero
+local cachedPlayers = {}
 
+local function updateCachedPlayers()
+    table.clear(cachedPlayers)
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then
+            table.insert(cachedPlayers, plr)
+        end
+    end
+end
+
+updateCachedPlayers()
+Players.PlayerAdded:Connect(updateCachedPlayers)
+Players.PlayerRemoving:Connect(updateCachedPlayers)
+
+RunService.RenderStepped:Connect(function(deltaTime)
+    -- Update FOV circle less frequently (only when needed)
+    if aimbotEnabled and not DEV_MODE and FOVCircle then
+        lastFOVUpdate = lastFOVUpdate + deltaTime
+        
+        if lastFOVUpdate > 0.1 then -- Update every 0.1 seconds instead of every frame
+            local currentViewport = Camera.ViewportSize
+            cachedViewportCenter = Vector2.new(currentViewport.X/2, currentViewport.Y/2)
+            
+            FOVCircle.Visible = true
+            FOVCircle.Radius = fovRadius
+            FOVCircle.Position = cachedViewportCenter
+            FOVCircle.Color = fovColor
+            
+            lastFOVUpdate = 0
+        end
+    elseif FOVCircle then
+        FOVCircle.Visible = false
+    end
+    
+    -- Optimized aimbot targeting with throttling
     if aimbotEnabled and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
-        local target = getClosestTarget()
-        if target then
-            Camera.CFrame = Camera.CFrame:Lerp(
-                CFrame.new(Camera.CFrame.Position, target.Position),
-                aimbotSmoothness
-            )
+        lastTargetCheck = lastTargetCheck + deltaTime
+        
+        -- Check for target less frequently (every 0.05 seconds = 20 times/sec)
+        if lastTargetCheck > 0.05 then
+            local target = getClosestTarget()
+            if target then
+                Camera.CFrame = Camera.CFrame:Lerp(
+                    CFrame.new(Camera.CFrame.Position, target.Position),
+                    aimbotSmoothness
+                )
+            end
+            lastTargetCheck = 0
         end
     end
 end)
@@ -431,11 +465,13 @@ main.InputBegan:Connect(function(i)
         startPos = main.Position
     end
 end)
+
 UserInputService.InputEnded:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.MouseButton1 then
         dragging = false
     end
 end)
+
 UserInputService.InputChanged:Connect(function(i)
     if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
         local delta = i.Position - dragStart
@@ -512,6 +548,7 @@ end
 pages.Aimbot = page()
 pages.Chams = page()
 pages.Misc = page()
+pages.YachtTimer = page() -- Add this line
 pages.Settings = page()
 pages.Aimbot.Visible = true
 
@@ -538,6 +575,7 @@ end
 tab("Aimbot",20,function()switch("Aimbot")end)
 tab("Chams",65,function()switch("Chams")end)
 tab("Misc",110,function()switch("Misc")end)
+tab("Yacht Timer",200,function()switch("YachtTimer")end)
 tab("Settings",155,function()switch("Settings")end)
 
 --------------------------------------------------
@@ -578,6 +616,8 @@ local function slider(parent,text,y,min,max,get,set)
     bar.Position = UDim2.new(0,0,0,y+25)
     bar.BackgroundColor3 = Color3.fromRGB(120,80,160)
     bar.BorderSizePixel = 0
+    bar.Selectable = true
+    bar.Active = true
     Instance.new("UICorner", bar).CornerRadius = UDim.new(1,0)
 
     local fill = Instance.new("Frame", bar)
@@ -594,8 +634,46 @@ local function slider(parent,text,y,min,max,get,set)
 
     update((get()-min)/(max-min))
 
+    -- Prevent parent from dragging when clicking slider
+    local isDraggingSlider = false
+    
     bar.InputBegan:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.MouseButton1 then
+            isDraggingSlider = true
+            -- Block the main frame's dragging
+            i:StopPropagation()
+            
+            local pct = math.clamp(
+                (i.Position.X - bar.AbsolutePosition.X)/bar.AbsoluteSize.X,0,1
+            )
+            update(pct)
+        end
+    end)
+    
+    UserInputService.InputChanged:Connect(function(i)
+        if isDraggingSlider and i.UserInputType == Enum.UserInputType.MouseMovement then
+            local mousePos = i.Position
+            local barPos = bar.AbsolutePosition
+            local barSize = bar.AbsoluteSize
+            local pct = math.clamp(
+                (mousePos.X - barPos.X)/barSize.X,0,1
+            )
+            update(pct)
+        end
+    end)
+    
+    UserInputService.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then
+            isDraggingSlider = false
+        end
+    end)
+    
+    -- Also handle clicking on the fill area
+    fill.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then
+            isDraggingSlider = true
+            i:StopPropagation()
+            
             local pct = math.clamp(
                 (i.Position.X - bar.AbsolutePosition.X)/bar.AbsoluteSize.X,0,1
             )
@@ -603,7 +681,6 @@ local function slider(parent,text,y,min,max,get,set)
         end
     end)
 end
-
 --------------------------------------------------
 -- DROPDOWN HELPER
 --------------------------------------------------
@@ -923,7 +1000,128 @@ local fovColorPicker = createColorPicker(pages.Misc, "FOV Circle Color", 280,
     end,
     nil
 )
+--------------------------------------------------
+-- YACHT TIMER TAB CONTENT
+--------------------------------------------------
+local yachtY = 0
 
+-- Title
+local yachtTitle = Instance.new("TextLabel", pages.YachtTimer)
+yachtTitle.Text = "🚤 YACHT ROBBERY TIMER"
+yachtTitle.Size = UDim2.new(1, 0, 0, 40)
+yachtTitle.Position = UDim2.new(0, 0, 0, 0)
+yachtTitle.TextColor3 = Color3.fromRGB(0, 200, 255)
+yachtTitle.BackgroundTransparency = 1
+yachtTitle.Font = Enum.Font.GothamBold
+yachtTitle.TextSize = 18
+yachtY = yachtY + 45
+
+-- Main timer display
+local yachtTimerDisplay = Instance.new("TextLabel", pages.YachtTimer)
+yachtTimerDisplay.Name = "YachtTimerDisplay"
+yachtTimerDisplay.Text = "Loading..."
+yachtTimerDisplay.Size = UDim2.new(1, 0, 0, 80)
+yachtTimerDisplay.Position = UDim2.new(0, 0, 0, yachtY)
+yachtTimerDisplay.TextColor3 = Color3.fromRGB(255, 255, 255)
+yachtTimerDisplay.BackgroundTransparency = 1
+yachtTimerDisplay.Font = Enum.Font.GothamBold
+yachtTimerDisplay.TextSize = 36
+yachtY = yachtY + 90
+
+-- Status
+local yachtStatus = Instance.new("TextLabel", pages.YachtTimer)
+yachtStatus.Text = "Server: " .. game.JobId:sub(1, 8) .. "..."
+yachtStatus.Size = UDim2.new(1, 0, 0, 30)
+yachtStatus.Position = UDim2.new(0, 0, 0, yachtY)
+yachtStatus.TextColor3 = Color3.fromRGB(200, 200, 200)
+yachtStatus.BackgroundTransparency = 1
+yachtStatus.Font = Enum.Font.Gotham
+yachtStatus.TextSize = 14
+yachtY = yachtY + 40
+
+-- Refresh button
+local refreshBtn = Instance.new("TextButton", pages.YachtTimer)
+refreshBtn.Text = "🔄 REFRESH TIMER"
+refreshBtn.Size = UDim2.new(0, 200, 0, 36)
+refreshBtn.Position = UDim2.new(0.5, -100, 0, yachtY)
+refreshBtn.BackgroundColor3 = Color3.fromRGB(90, 50, 140)
+refreshBtn.TextColor3 = Color3.new(1, 1, 1)
+refreshBtn.Font = Enum.Font.GothamBold
+Instance.new("UICorner", refreshBtn).CornerRadius = UDim.new(0, 10)
+
+-- Timer logic
+local function updateYachtTimer()
+    local yachtFolder = workspace:FindFirstChild("YachtRobbery")
+    if not yachtFolder then
+        yachtTimerDisplay.Text = "NOT FOUND"
+        yachtTimerDisplay.TextColor3 = Color3.fromRGB(255, 50, 50)
+        yachtStatus.Text = "YachtRobbery folder missing"
+        return
+    end
+    
+    -- Look for timer
+    local timerValue = nil
+    local possibleNames = {"Cooldown", "Timer", "TimeLeft", "Remaining"}
+    
+    for _, name in pairs(possibleNames) do
+        local value = yachtFolder:FindFirstChild(name)
+        if value and (value:IsA("NumberValue") or value:IsA("IntValue")) then
+            timerValue = value
+            break
+        end
+    end
+    
+    if not timerValue then
+        yachtTimerDisplay.Text = "NO TIMER"
+        yachtTimerDisplay.TextColor3 = Color3.fromRGB(255, 50, 50)
+        yachtStatus.Text = "Timer value not found"
+        return
+    end
+    
+    local timeSeconds = timerValue.Value
+    
+    -- Handle Unix timestamp
+    if timeSeconds > 1000000000 then
+        timeSeconds = math.max(0, timeSeconds - os.time())
+    end
+    
+    -- Update display
+    if timeSeconds <= 0 then
+        yachtTimerDisplay.Text = "READY"
+        yachtTimerDisplay.TextColor3 = Color3.fromRGB(0, 255, 100)
+        yachtStatus.Text = "Yacht robbery available!"
+    else
+        local minutes = math.floor(timeSeconds / 60)
+        local seconds = math.floor(timeSeconds % 60)
+        yachtTimerDisplay.Text = string.format("%02d:%02d", minutes, seconds)
+        
+        if timeSeconds > 900 then
+            yachtTimerDisplay.TextColor3 = Color3.fromRGB(255, 100, 100)
+        elseif timeSeconds > 300 then
+            yachtTimerDisplay.TextColor3 = Color3.fromRGB(255, 200, 100)
+        else
+            yachtTimerDisplay.TextColor3 = Color3.fromRGB(100, 255, 100)
+        end
+        
+        yachtStatus.Text = string.format("%d minutes %d seconds remaining", minutes, seconds)
+    end
+end
+
+-- Set up monitoring
+refreshBtn.MouseButton1Click:Connect(updateYachtTimer)
+
+-- Update every second when tab is visible
+spawn(function()
+    while pages.YachtTimer and pages.YachtTimer.Parent do
+        if pages.YachtTimer.Visible then
+            updateYachtTimer()
+        end
+        wait(1)
+    end
+end)
+
+-- Initial update
+updateYachtTimer()
 --------------------------------------------------
 -- PLAYER HOOKING (RESPAWN SAFE)
 --------------------------------------------------
